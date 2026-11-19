@@ -1,5 +1,6 @@
 const { formatValidationErrors } = require('./validator');
 const { resolveQueryParameters, parseQuery, applyFilters } = require('./queryFilter');
+const { createRelations, RelationError } = require('./relations');
 
 
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
@@ -21,6 +22,7 @@ function collectionNameFromPath(openApiPath) {
 function registerApiRoutes(app, spec, database, validator) {
   let routeCount = 0;
   const paths = spec.paths || {};
+  const relations = createRelations(spec, database, collectionNameFromPath);
 
 
   for (const [openApiPath, pathItem] of Object.entries(paths)) {
@@ -52,7 +54,7 @@ function registerApiRoutes(app, spec, database, validator) {
           if (methodName === 'get') {
             if (id !== undefined) {
               const record = database.getById(collectionName, id);
-              return record ? res.json(record) : res.status(404).json({ error: `${collectionName} record not found` });
+              return record ? res.json(relations.hydrate(collectionName, record)) : res.status(404).json({ error: `${collectionName} record not found` });
             }
 
             // Collection request: filter by any query parameters declared in the spec.
@@ -60,24 +62,25 @@ function registerApiRoutes(app, spec, database, validator) {
             if (errors.length > 0) {
               return res.status(400).json({ error: 'Invalid query parameters', details: errors });
             }
-            return res.json(applyFilters(database.getAll(collectionName), filters));
+            const records = database.getAll(collectionName).map((record) => relations.hydrate(collectionName, record));
+            return res.json(applyFilters(records, filters));
           }
 
           if (methodName === 'post') {
-            const created = database.create(collectionName, body);
-            return res.status(201).json(created);
+            const created = database.create(collectionName, relations.prepareForStorage(requestSchema, body));
+            return res.status(201).json(relations.hydrate(collectionName, created));
           }
 
           if (methodName === 'put') {
             if (id === undefined) return res.status(400).json({ error: 'PUT requires an ID path parameter' });
-            const updated = database.replace(collectionName, id, body);
-            return updated ? res.json(updated) : res.status(404).json({ error: `${collectionName} record not found` });
+            const updated = database.replace(collectionName, id, relations.prepareForStorage(requestSchema, body));
+            return updated ? res.json(relations.hydrate(collectionName, updated)) : res.status(404).json({ error: `${collectionName} record not found` });
           }
 
           if (methodName === 'patch') {
             if (id === undefined) return res.status(400).json({ error: 'PATCH requires an ID path parameter' });
-            const updated = database.patch(collectionName, id, body);
-            return updated ? res.json(updated) : res.status(404).json({ error: `${collectionName} record not found` });
+            const updated = database.patch(collectionName, id, relations.prepareForStorage(requestSchema, body));
+            return updated ? res.json(relations.hydrate(collectionName, updated)) : res.status(404).json({ error: `${collectionName} record not found` });
           }
 
           if (methodName === 'delete') {
@@ -86,6 +89,9 @@ function registerApiRoutes(app, spec, database, validator) {
             return deleted ? res.status(204).send() : res.status(404).json({ error: `${collectionName} record not found` });
           }
         } catch (error) {
+          if (error instanceof RelationError) {
+            return res.status(400).json({ error: 'Invalid reference', details: [{ message: error.message }] });
+          }
           console.error('API operation error:', error);
           return res.status(500).json({ error: 'Internal server error' });
         }

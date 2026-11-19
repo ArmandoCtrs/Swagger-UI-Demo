@@ -82,6 +82,12 @@ function parseQuery(query, parameters) {
 
 function matches(fieldValue, wanted) {
   if (fieldValue === undefined || fieldValue === null) return false;
+  // Array fields (e.g. a student's classes) match if any element does.
+  if (Array.isArray(fieldValue)) return fieldValue.some((item) => matches(item, wanted));
+  // Nested objects match if any of their simple values (id, name, ...) equal the wanted value.
+  if (typeof fieldValue === 'object') {
+    return Object.values(fieldValue).some((inner) => typeof inner !== 'object' && matches(inner, wanted));
+  }
   if (typeof wanted === 'string') return String(fieldValue).toLowerCase() === wanted.toLowerCase();
   return fieldValue === wanted;
 }
