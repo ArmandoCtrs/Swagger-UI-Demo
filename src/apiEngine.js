@@ -1,4 +1,5 @@
 const { formatValidationErrors } = require('./validator');
+const { resolveQueryParameters, parseQuery, applyFilters } = require('./queryFilter');
 
 
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
@@ -32,6 +33,7 @@ function registerApiRoutes(app, spec, database, validator) {
       const requestSchema = operation.requestBody?.content?.['application/json']?.schema;
       const validateBody = requestSchema ? validator.compile(requestSchema) : null;
       const methodName = method.toLowerCase();
+      const queryParameters = resolveQueryParameters(spec, pathItem, operation);
 
       app[methodName](expressPath, (req, res) => {
         const id = req.params.id;
@@ -52,7 +54,13 @@ function registerApiRoutes(app, spec, database, validator) {
               const record = database.getById(collectionName, id);
               return record ? res.json(record) : res.status(404).json({ error: `${collectionName} record not found` });
             }
-            return res.json(database.getAll(collectionName));
+
+            // Collection request: filter by any query parameters declared in the spec.
+            const { filters, errors } = parseQuery(req.query, queryParameters);
+            if (errors.length > 0) {
+              return res.status(400).json({ error: 'Invalid query parameters', details: errors });
+            }
+            return res.json(applyFilters(database.getAll(collectionName), filters));
           }
 
           if (methodName === 'post') {
